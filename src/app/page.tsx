@@ -75,7 +75,7 @@ export default function home() {
               </input>
           </div>
           {message &&(
-            <p className='text-sm text-red-400 text-center font-medium px-2'>
+            <p className='text-sm text-blue-500 text-center font-medium px-2'>
               {message}
             </p>
           )}

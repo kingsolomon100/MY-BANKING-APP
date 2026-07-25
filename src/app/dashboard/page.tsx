@@ -1,4 +1,5 @@
 'use client';
+
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -22,8 +23,9 @@ export default function Dashboard() {
   const [dbError, setDbError] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
-  
+
   const router = useRouter();
+
 
   const handleAuthFetch = useCallback(async () => {
     setLoading(true);
@@ -37,6 +39,7 @@ export default function Dashboard() {
       return;
     }
 
+    
     const { data, error: db_error } = await supabase
       .from("profiles")
       .select("email, balance")
@@ -45,11 +48,11 @@ export default function Dashboard() {
 
     if (db_error) {
       console.error('Database fetch error:', db_error);
-      setDbError('Could not fetch account details. Check network connection.');
+      setDbError(`Database Connection Error: ${db_error.message}`);
     } else if (data) {
       setProfile({
         email: data.email || user.email || "",
-        balance: data.balance ?? 0,
+        balance: data.balance ?? 1000.00,
       });
     }
 
@@ -73,7 +76,7 @@ export default function Dashboard() {
       return;
     }
 
-    const transferAmount = parseFloat(amount);
+    const transferAmount = Number(parseFloat(amount).toFixed(2));
     if (isNaN(transferAmount) || transferAmount <= 0) {
       setTxMessage('Please enter a valid transfer amount.');
       return;
@@ -83,20 +86,47 @@ export default function Dashboard() {
     setTxMessage('Processing transaction...');
 
     try {
-      const { error } = await supabase.rpc("transfer_money", {
-        recipientEmail: recipientEmail,
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        setTxMessage('Transaction Failed: Session expired. Please sign out and sign in again.');
+        setIsTransferring(false);
+        return;
+      }
+
+      const activeSenderEmail = profile?.email || session.user.email || "";
+
+      if (!activeSenderEmail) {
+        setTxMessage('Transaction Failed: Could not verify active sender email.');
+        setIsTransferring(false);
+        return;
+      }
+
+      // Execute RPC using the centralized supabase client instance
+      const response = await supabase.rpc("transfer_money", {
+        sender_email: activeSenderEmail.trim(),
+        recipient_email: recipientEmail.trim(),
         transfer_amount: transferAmount,
       });
 
-      if (error) throw error;
+      console.log('--- RPC RESPONSE DEBUG ---');
+      console.log('Data:', response.data);
+      console.log('Error:', response.error);
 
-      setTxMessage('✅ Success! Transaction completed.');
-      setAmount("");
-      setRecipientEmail("");
-      await handleAuthFetch();
-    } catch (error: unknown) {
-      const errMessage = error instanceof Error ? error.message : "An unexpected error occurred.";
-      setTxMessage(`Transaction Failed: ${errMessage}`);
+      if (response.error) {
+        setTxMessage(`RPC Error (${response.error.code}): ${response.error.message}`);
+      } else if (typeof response.data === 'string' && response.data.startsWith('Error:')) {
+        setTxMessage(`SQL Logic Error: ${response.data.replace('Error: ', '')}`);
+      } else {
+        setTxMessage('✅ Success! Transaction completed.');
+        setAmount("");
+        setRecipientEmail("");
+        await handleAuthFetch();
+      }
+    } catch (err: any) {
+      console.error('Caught Transfer Exception:', err);
+      const caughtMsg = err?.message || err?.error_description || JSON.stringify(err);
+      setTxMessage(`Transaction Failed: ${caughtMsg}`);
     } finally {
       setIsTransferring(false);
     }
@@ -119,7 +149,7 @@ export default function Dashboard() {
           <span className="text-xl md:text-2xl text-emerald-500 font-bold tracking-wider uppercase">
             ✈ First Bank PLC
           </span>
-          
+
           <div className="flex items-center gap-4">
             <span className="font-semibold text-sm text-gray-200 hidden sm:inline">
               {profile?.email}
@@ -134,7 +164,6 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      {/* Main Content */}
       <main className="max-w-2xl mx-auto space-y-6">
         {dbError && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg font-medium">
@@ -144,25 +173,22 @@ export default function Dashboard() {
         )}
 
         <div className="rounded-xl border border-gray-200 bg-white p-6 md:p-8 space-y-6 shadow-md">
-          {/* Header */}
           <div>
             <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900">Welcome</h2>
             <p className="text-sm text-blue-600 font-medium">Secure Ledger Access Overview</p>
           </div>
 
-          {/* Balance Card */}
           <div className="p-6 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 shadow-md text-white">
             <div className="text-xs uppercase text-emerald-200 tracking-wider font-bold mb-1 opacity-80">
               Primary Checking Ledger
             </div>
             <h3 className="text-4xl font-black">
-              ${profile?.balance !== undefined 
-                ? profile.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) 
+              ${profile?.balance !== undefined
+                ? profile.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                 : '0.00'}
             </h3>
           </div>
 
-          {/* RLS Status Badge */}
           <div className="py-3 px-4 rounded-xl border border-blue-200 bg-blue-50 flex items-center text-sm gap-3">
             <span className="text-2xl leading-none">✨</span>
             <p className="text-blue-900 font-medium">
@@ -170,10 +196,9 @@ export default function Dashboard() {
             </p>
           </div>
 
-          {/* Transfer Form */}
           <form onSubmit={handleTransfer} className="space-y-4 bg-gray-50 p-6 rounded-xl border border-gray-200">
             <h4 className="text-gray-800 text-md font-bold">Send Money Securely</h4>
-            
+
             <div>
               <label className="text-xs font-bold text-gray-700 block mb-1">
                 Recipient Email
@@ -215,10 +240,13 @@ export default function Dashboard() {
             </button>
           </form>
 
-          {/* Transaction Message Feedback */}
           {txMessage && (
             <div className={`text-center text-sm font-semibold p-3 rounded-lg ${
-              txMessage.includes('✅') ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'
+              txMessage.includes('✅') 
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                : txMessage.includes('RPC Error') || txMessage.includes('Failed') || txMessage.includes('SQL Logic Error')
+                ? 'bg-red-50 text-red-800 border border-red-200'
+                : 'bg-amber-50 text-amber-800 border border-amber-200'
             }`}>
               {txMessage}
             </div>
